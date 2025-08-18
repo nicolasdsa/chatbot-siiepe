@@ -1,0 +1,108 @@
+volumes:
+  qdrant_storage:
+  models:   # guarda pesos do LLM e embeddings, persiste entre execuções
+
+networks:
+  rag-network:
+    driver: bridge
+
+services:
+  model-puller:
+    build:
+      context: .
+      dockerfile: Dockerfile.puller
+    container_name: model-puller
+    restart: "no"
+    env_file:
+      - .env
+    volumes:
+      - models:/models
+    networks:
+      - rag-network
+    command: ["python", "/pull_models.py"]
+    healthcheck:
+      test: ["CMD", "bash", "-lc", "test -f /models/.ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 120
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    ports: # <-- ADICIONE ESTA SEÇÃO
+      - "6333:6333" # Mapeia a porta 6333 do contêiner para a 6333 do seu PC
+    networks:
+      - rag-network
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+  llama:
+    build:
+      context: .
+      dockerfile: Dockerfile.llama
+    container_name: llama
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - models:/models
+    networks:
+      - rag-network
+    #depends_on:
+    #  model-puller:
+    #    condition: service_healthy
+    command: ["/bin/bash", "-lc", "/wait_for_models.sh && python3 -m llama_cpp.server --model ${LLAMA_MODEL_PATH} --host 0.0.0.0 --port 8000 --n_ctx 4096"]
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+  chat-web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_RAG_TOKEN: ${RAG_TOKEN}
+    container_name: chat-web
+    restart: unless-stopped
+    depends_on:
+      rag-api:
+        condition: service_started
+    networks:
+      - rag-network
+    ports:
+      - "5173:80"
+
+  rag-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: rag-api
+    restart: unless-stopped
+    depends_on:
+      qdrant:
+        condition: service_started
+      llama:
+        condition: service_started
+      #model-puller:
+      #  condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # força o transformers a usar o caminho local (baixado pelo model-puller)
+      EMBEDDING_LOCAL_PATH: ${EMBEDDING_LOCAL_PATH}
+    ports:
+      - "8000:8000"
+    networks:
+      - rag-network
+    volumes:
+      - models:/models
+    command: ["/bin/bash", "-lc", "/wait_for_models.sh && uvicorn app:app --host 0.0.0.0 --port 8000"]
+    deploy:
+      resources:
+        limits:
+          memory: 2g

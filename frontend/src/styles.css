@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Bubbles reutilizáveis */
+.chat-bubble {
+  @apply rounded-2xl px-4 py-3 shadow-soft;
+}
+.chat-bubble-user {
+  @apply bg-primary text-white;
+}
+.chat-bubble-bot {
+  @apply bg-card text-ink border border-gray-200;
+}
+
+/* Mostra links com destaque e acessibilidade */
+.chat-content a {
+  @apply text-primary underline hover:no-underline font-medium;
+}
+
+/* Placeholder “digitando…” com três bolinhas */
+.typing-dots span {
+  @apply inline-block w-2 h-2 bg-inkSoft rounded-full mr-1;
+}
+.typing-dots span:nth-child(1) { animation: pulseDots 1.2s -0.32s infinite; }
+.typing-dots span:nth-child(2) { animation: pulseDots 1.2s -0.16s infinite; }
+.typing-dots span:nth-child(3) { animation: pulseDots 1.2s 0s infinite; }
+
+/* Scroll suave da lista */
+.messages {
+  scroll-behavior: smooth;
+}
+
+@keyframes caretBlink { 0%, 49% { opacity: 1 } 50%, 100% { opacity: 0 } }
+.caret {
+  display: inline-block;
+  width: 6px;
+  height: 1.05em;
+  vertical-align: -0.2em;
+  background: #1F2937; /* ink */
+  animation: caretBlink 1s steps(1) infinite;
+}
+.dark .caret { background: #fff; }

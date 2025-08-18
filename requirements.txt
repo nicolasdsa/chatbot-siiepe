@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+qdrant-client
+torch
+numpy<2
+transformers
+safetensors
+pymupdf
+python-dotenv
+slowapi
+requests
+pydantic-settings
+python-multipart
+beautifulsoup4

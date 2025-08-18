@@ -1,0 +1,29 @@
+# Dockerfile.api
+FROM python:3.10-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends git bash \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Script de espera: checa se o diretório de embeddings existe e tem config/tokenizer
+RUN set -eux; \
+  cat > /wait_for_models.sh <<'EOF'
+#!/usr/bin/env bash
+set -e
+: "${EMBEDDING_LOCAL_PATH:=/models/embeddings/intfloat__multilingual-e5-base}"
+echo "[api] Aguardando embeddings em $EMBEDDING_LOCAL_PATH ..."
+while [ ! -f "$EMBEDDING_LOCAL_PATH/config.json" ] && [ ! -f "$EMBEDDING_LOCAL_PATH/tokenizer.json" ]; do
+  sleep 2
+done
+echo "[api] Embeddings prontos."
+EOF
+RUN chmod +x /wait_for_models.sh
+
+COPY . /app
+
+EXPOSE 8000

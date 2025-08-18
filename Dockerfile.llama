@@ -1,0 +1,26 @@
+# Dockerfile.llama
+FROM python:3.10-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential cmake bash \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir "llama-cpp-python[server]"
+
+# Cria o script de espera de forma robusta (sem interpolação no build)
+RUN set -eux; \
+  cat > /wait_for_models.sh <<'EOF'
+#!/usr/bin/env bash
+set -e
+: "${LLAMA_MODEL_PATH:=/models/llm/qwen2.5-3b-instruct-q4_k_m.gguf}"
+echo "[llama] Aguardando LLM em $LLAMA_MODEL_PATH ..."
+until [ -f "$LLAMA_MODEL_PATH" ]; do sleep 2; done
+echo "[llama] Modelo encontrado. Iniciando servidor."
+EOF
+RUN chmod +x /wait_for_models.sh
+
+WORKDIR /models
+ENV LLAMA_MODEL_PATH=/models/llm/qwen2.5-3b-instruct-q4_k_m.gguf
+VOLUME ["/models"]
+EXPOSE 8000
