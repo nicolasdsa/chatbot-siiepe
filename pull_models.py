@@ -44,7 +44,6 @@ def ensure_llm():
         local_dir_use_symlinks=False,
         token=HF_TOKEN
     )
-    # garante nome exato
     if p != target_path and os.path.exists(p):
         os.rename(p, target_path)
     print("[puller] LLM GGUF pronto.")
@@ -52,6 +51,5 @@ def ensure_llm():
 if __name__ == "__main__":
     ensure_embeddings()
     ensure_llm()
-    # marca prontidão
     open("/models/.ready", "w").close()
     print("[puller] Done. (/models/.ready criado)")

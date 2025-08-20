@@ -1,4 +1,4 @@
-# settings.py (compatível com Pydantic v2 e tolerante a env)
+# settings.py 
 from typing import List, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     llama_api_base: str = "http://llama:8000/v1"
     llama_api_key: Optional[str] = None
     llama_model_name: str = "local"
-    
+
     rag_token: str = "changeme"
     enable_cors: bool = True
     allowed_origins: List[str] = ["*"]
@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=False,
-        extra="ignore",          # <<-- aceita chaves não declaradas
+        extra="ignore",         
     )
 
     @field_validator("allowed_origins", mode="before")
@@ -33,14 +33,12 @@ class Settings(BaseSettings):
         if v is None or (isinstance(v, str) and v.strip() == ""):
             return ["*"]
         if isinstance(v, str):
-            # tenta JSON
             import json
             try:
                 parsed = json.loads(v)
                 if isinstance(parsed, list):
                     return parsed
             except Exception:
-                # fallback CSV
                 return [s.strip() for s in v.split(",") if s.strip()]
         return v
 

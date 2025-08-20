@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { sanitizeHtml } from "../lib/sanitize";
 
-const API_BASE = "/api"; // Nginx proxy -> rag-api:8000
+const API_BASE = "/api";
 const LS_KEY_HISTORY = "siepe-chat-history";
 
 // Token vem do build (Docker/Vite)
@@ -164,7 +164,6 @@ export default function Chat() {
   }
 
   function clearChat() {
-    // limpa tudo: tela + localStorage
     try { localStorage.removeItem(LS_KEY_HISTORY); } catch {}
     setMessages([]);
     setInput("");

@@ -1,4 +1,4 @@
-# Makefile - Comandos úteis para construir e rodar os contêineres
+# Makefile 
 build:
 	docker-compose build
 
@@ -15,7 +15,6 @@ ingest-dir:
 	# Executa contêiner de ingestão para processar PDFs em ./pdfs
 	docker-compose run --rm rag-api python ingest.py /data/pdfs
 
-# Atalho para executar ingestão via API (requer curl instalado no host)
 ingest-api:
 ifneq ("$(file)","")
 	curl -X POST -H "Content-Type: multipart/form-data" \

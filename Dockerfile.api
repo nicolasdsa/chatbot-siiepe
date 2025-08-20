@@ -10,7 +10,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Script de espera: checa se o diretório de embeddings existe e tem config/tokenizer
 RUN set -eux; \
   cat > /wait_for_models.sh <<'EOF'
 #!/usr/bin/env bash

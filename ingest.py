@@ -10,7 +10,6 @@ from settings import settings
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Carrega modelo/tokenizer do diretório local (baixado pelo model-puller)
 emb_path = settings.embedding_local_path or settings.embedding_model
 logger.info(f"Carregando embeddings de: {emb_path}")
 tokenizer = AutoTokenizer.from_pretrained(emb_path)
@@ -52,6 +51,7 @@ META_FIELDS = {
     "apresentador": re.compile(r"Apresentador\(a\):\s*(.+)", re.IGNORECASE),
     "titulo": re.compile(r"T[íi]tulo:\s*(.+)", re.IGNORECASE),
     "autores": re.compile(r"Autores?:\s*(.+)", re.IGNORECASE),
+    "orientador": re.compile(r"Orientador\(a\):\s*(.+)", re.IGNORECASE),
     "evento": re.compile(r"Evento:\s*(.+)", re.IGNORECASE),
     "area": re.compile(r"\b[ÁA]rea:\s*(.+)", re.IGNORECASE),
     "ano": re.compile(r"Ano:\s*(\d{4})", re.IGNORECASE),
@@ -102,7 +102,6 @@ def ingest_pdf(file_path: str):
     if doc.page_count > 0:
         first_text = doc.load_page(0).get_text("text")
         meta = extract_metadata(first_text)
-    # concatena texto completo
     full_text = ""
     for p in doc:
         full_text += p.get_text("text") + "\n"
@@ -121,7 +120,7 @@ def ingest_pdf(file_path: str):
         payload = meta.copy()
         payload["chunk_index"] = idx
         payload["content"] = ch
-        pid = str(uuid.uuid4()) # Correção: Gera um novo UUID para cada chunk
+        pid = str(uuid.uuid4()) 
         points.append(qmodels.PointStruct(id=pid, vector=vec, payload=payload))
     qdrant.upsert(collection_name=COLLECTION_NAME, points=points)
     logger.info("OK")

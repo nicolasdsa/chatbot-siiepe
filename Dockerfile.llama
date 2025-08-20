@@ -8,7 +8,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 RUN pip install --no-cache-dir --upgrade pip \
  && pip install --no-cache-dir "llama-cpp-python[server]"
 
-# Cria o script de espera de forma robusta (sem interpolação no build)
 RUN set -eux; \
   cat > /wait_for_models.sh <<'EOF'
 #!/usr/bin/env bash
