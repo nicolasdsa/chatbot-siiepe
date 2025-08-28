@@ -7,7 +7,6 @@ from typing import Iterable, List, Tuple, Optional, Dict, Callable
 import requests
 from bs4 import BeautifulSoup
 import fitz  # PyMuPDF
-
 from ingest import ingest_pdf  # seu pipeline existente
 
 logger = logging.getLogger(__name__)
@@ -96,10 +95,24 @@ def processar_url(ano: str, area_code: str, area_nome: str,
     Emite eventos no callback `on_item`.
     """
     url = f"https://cti.ufpel.edu.br/siepe/anais/{ano}/{area_code}/{evento_code}"
-    r = requests.get(url, timeout=(180, 300))
-    r.raise_for_status()
+    try:
+        r = requests.get(url, timeout=(30, 90))
+        logger.info("REQUEST")
+        logger.info(r.content)
+        r.raise_for_status()
+        itens = parse_tabela_trabalhos(r.content)
+    except Exception as e:
+        logger.error(f"[PAGE ERROR] Falha ao carregar/parsear página: {url} -> {e}")
+        if on_item:
+            on_item({
+                "event": "page_done",
+                "ano": ano, "area_code": area_code, "area_nome": area_nome,
+                "evento_code": evento_code, "evento_nome": evento_nome,
+                "url": url, "ok": 0, "falha": 0, "total": 0, "error": str(e)
+            })
 
-    itens = parse_tabela_trabalhos(r.content)
+        return {"url": url, "total_listados": 0, "ok": 0, "falha": 0, "erros": [str(e)]}
+
     total = len(itens)
     if max_itens is not None:
         itens = itens[:max_itens]
@@ -139,7 +152,7 @@ def processar_url(ano: str, area_code: str, area_nome: str,
             finally:
                 info_doc.close()
 
-            ingest_pdf(merged_tmp)  # <--- ingestão no RAG
+            ingest_pdf(merged_tmp)
             ok += 1
             if on_item:
                 on_item({"event": "item_done", "status": "ok", **meta_base})
@@ -196,13 +209,26 @@ def processar_todos(anos: Iterable[str] = None,
     for ano in anos:
         for area_code, area_nome in areas:
             for evento_code, evento_nome in eventos:
-                r = processar_url(
-                    ano=ano, area_code=area_code, area_nome=area_nome,
-                    evento_code=evento_code, evento_nome=evento_nome,
-                    max_itens=max_itens_por_pagina, on_item=on_item
-                )
+                url = f"https://cti.ufpel.edu.br/siepe/anais/{ano}/{area_code}/{evento_code}"
+                try:
+                    r = processar_url(
+                        ano=ano, area_code=area_code, area_nome=area_nome,
+                        evento_code=evento_code, evento_nome=evento_nome,
+                        max_itens=max_itens_por_pagina, on_item=on_item
+                    )
+                except Exception as e:
+                    # Última linha de defesa: loga, sinaliza e continua
+                    logger.error(f"[FATAL PAGE ERROR] {url}: {e}")
+                    if on_item:
+                        on_item({
+                            "event": "page_done", "ano": ano, "area_code": area_code, "area_nome": area_nome,
+                            "evento_code": evento_code, "evento_nome": evento_nome,
+                            "url": url, "ok": 0, "falha": 0, "total": 0, "error": str(e)
+                        })
+                    r = {"url": url, "total_listados": 0, "ok": 0, "falha": 0, "erros": [str(e)]}
+
                 resumo["total_paginas"] += 1
-                resumo["ok"] += r["ok"]
-                resumo["falha"] += r["falha"]
+                resumo["ok"] += r.get("ok", 0)
+                resumo["falha"] += r.get("falha", 0)
                 resumo["detalhes"].append(r)
     return resumo

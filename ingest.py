@@ -6,6 +6,7 @@ import torch
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
 from settings import settings
+import unicodedata
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -33,6 +34,15 @@ def embed_text(text: str, is_query: bool = False) -> list[float]:
     embedding = sum_hidden / count_tokens
     embedding = torch.nn.functional.normalize(embedding, p=2, dim=1)
     return embedding.cpu().tolist()[0]
+
+def normalize_text(s: str) -> str:
+    s_norm = unicodedata.normalize('NFD', s)
+    s_norm = "".join(ch for ch in s_norm if unicodedata.category(ch) != 'Mn')
+    s_norm = re.sub(r'\b\w\.\b', '', s_norm)      
+    s_norm = re.sub(r'\b\w\b', '', s_norm)     
+    s_norm = re.sub(r'[^\w\s]', ' ', s_norm)
+    s_norm = re.sub(r'\s+', ' ', s_norm).strip()
+    return s_norm.lower()
 
 qdrant = QdrantClient(url=settings.qdrant_url, api_key=settings.qdrant_api_key)
 COLLECTION_NAME = "articles"
@@ -108,6 +118,17 @@ def ingest_pdf(file_path: str):
     doc.close()
     if "titulo" in meta:
         meta["titulo"] = meta["titulo"].strip()
+    if "orientador" in meta:
+        meta["orientador_norm"] = normalize_text(meta["orientador"])
+    if "autores" in meta:
+        meta["autores_norm"] = normalize_text(meta["autores"])
+    if "titulo" in meta:
+        meta["titulo_norm"] = normalize_text(meta["titulo"])
+    if "area" in meta:
+        meta["area_norm"] = normalize_text(meta["area"])
+    if "apresentador" in meta:
+        meta["apresentador_norm"] = normalize_text(meta["apresentador"])
+        
     doc_id = str(uuid.uuid4())
     meta["doc_id"] = doc_id
 

@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 import re, unicodedata
+from qdrant_client.http import models as qmodels
 import requests
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -84,6 +85,59 @@ EVENTOS_MAP = {
 
 JOBS: Dict[str, Dict[str, Any]] = {}
 JOB_LOCK = threading.Lock()
+
+def normalize_text(s: str) -> str:
+    s_norm = unicodedata.normalize('NFD', s)
+    s_norm = "".join(ch for ch in s_norm if unicodedata.category(ch) != 'Mn') 
+    s_norm = re.sub(r'\b\w\.\b', '', s_norm)  
+    s_norm = re.sub(r'\b\w\b', '', s_norm)     
+    s_norm = re.sub(r'[^\w\s]', ' ', s_norm)  
+    s_norm = re.sub(r'\s+', ' ', s_norm).strip()
+    return s_norm.lower()
+
+NORMALIZED_FIELD_MAP = {
+    "orientador":   "orientador_norm",
+    "autores":      "autores_norm",
+    "titulo":       "titulo_norm",
+    "area":         "area_norm",
+    "apresentador": "apresentador_norm",
+}
+
+def build_name_must_should(field_key_norm: str, raw_name: str):
+    """
+    Para nomes de pessoa (orientador): 
+    - must: primeiro e último tokens
+    - should: tokens do meio (opcionais) + repetição do último token (garantia de satisfazer o 'should')
+    """
+    tokens = normalize_text(raw_name).split()
+    must_conds, should_conds = [], []
+
+    if not tokens:
+        return must_conds, should_conds
+
+    if len(tokens) == 1:
+        must_conds.append(qmodels.FieldCondition(
+            key=field_key_norm, match=qmodels.MatchText(text=tokens[0])
+        ))
+        return must_conds, should_conds
+
+    first, last = tokens[0], tokens[-1]
+    middle = tokens[1:-1]
+
+    # must: primeiro e último nomes
+    must_conds.append(qmodels.FieldCondition(key=field_key_norm, match=qmodels.MatchText(text=first)))
+    must_conds.append(qmodels.FieldCondition(key=field_key_norm, match=qmodels.MatchText(text=last)))
+
+    # should: nomes do meio (opcionais)
+    for tok in middle:
+        should_conds.append(qmodels.FieldCondition(key=field_key_norm, match=qmodels.MatchText(text=tok)))
+
+    # "rede de segurança": repete o último no should para que o bloco should não exclua o item
+    # (em Qdrant, se existir 'should', pelo menos uma deve ser verdadeira)
+    if last:
+        should_conds.append(qmodels.FieldCondition(key=field_key_norm, match=qmodels.MatchText(text=last)))
+
+    return must_conds, should_conds
 
 def extract_filters_and_refine_query(original_query: str) -> Dict[str, Any]:
     """
@@ -259,6 +313,9 @@ def _build_event_list(codes: Optional[List[str]]):
         return None
     return [(c, EVENTOS_MAP.get(c, c)) for c in codes]
 
+def normalize_query_text(s: str) -> str:
+    return " ".join(s.split()).strip()
+
 def _run_job(job_id: str, req: SiepeIngestRequest):
     try:
         _update_job(job_id, {"status": "running"})
@@ -354,10 +411,7 @@ def query_endpoint(request: QueryRequest):
     if not q:
         raise HTTPException(status_code=422, detail="Query vazia.")
 
-    # Em vez de usar a query e filtros diretamente da requisição,
-    # os derivamos da pergunta do usuário.
-    # Nota: `request.filters` ainda pode ser usado se você quiser permitir filtros manuais da API.
-    
+    # 1) Extração de filtros + query refinada via LLM
     extraction_result = extract_filters_and_refine_query(q)
     query_text_for_embedding = extraction_result["query_refinada"]
     extracted_filters = extraction_result["filters"]
@@ -366,19 +420,61 @@ def query_endpoint(request: QueryRequest):
     logger.info(f"VETOR DA QUERY (primeiras 5 dims): {query_vector[:5]}")
 
     final_filters = request.filters or {}
-    final_filters.update(extracted_filters)
+    final_filters.update(extracted_filters or {})
+
+    must_conds: list[qmodels.Condition] = []
+    should_conds: list[qmodels.Condition] = []
+
+    for field, value in (final_filters or {}).items():
+        if value is None:
+            continue
+
+        if isinstance(value, list):
+            for v in value:
+                if isinstance(v, str):
+                    mapped = NORMALIZED_FIELD_MAP.get(field, field)
+                    text = normalize_text(v) if mapped.endswith("_norm") or field in NORMALIZED_FIELD_MAP else v.strip()
+                    should_conds.append(qmodels.FieldCondition(key=mapped, match=qmodels.MatchText(text=text)))
+                else:
+                    should_conds.append(qmodels.FieldCondition(key=field, match=qmodels.MatchValue(value=v)))
+            continue
+
+        if field in ("orientador", "orientador_norm") and isinstance(value, str):
+            norm_key = "orientador_norm"
+            mcs, scs = build_name_must_should(norm_key, value)
+            must_conds.extend(mcs)
+            should_conds.extend(scs)
+            continue
+
+        mapped_key = NORMALIZED_FIELD_MAP.get(field)
+        if mapped_key and isinstance(value, str):
+            norm_text = normalize_text(value)
+            must_conds.append(qmodels.FieldCondition(
+                key=mapped_key,
+                match=qmodels.MatchText(text=norm_text)
+            ))
+            continue
+
+        if isinstance(value, str):
+            must_conds.append(qmodels.FieldCondition(
+                key=field,
+                match=qmodels.MatchText(text=value.strip())
+            ))
+            continue
+
+        must_conds.append(qmodels.FieldCondition(
+            key=field,
+            match=qmodels.MatchValue(value=value)
+        ))
 
     query_filter = None
-    if final_filters:
-        conds = []
-        for field, value in final_filters.items():
-            conds.append(qmodels.FieldCondition(key=field, match=qmodels.MatchValue(value=value)))
-        if conds:
-            query_filter = qmodels.Filter(must=conds)
-            
+    if must_conds or should_conds:
+        query_filter = qmodels.Filter(
+            must=must_conds or None,
+            should=should_conds or None
+        )
 
-    logger.info(query_vector)
-    logger.info(query_filter)
+    logger.info(f"[FILTER] must={must_conds} | should={should_conds}")
 
     hits = qdrant.search(
         collection_name=COLLECTION_NAME,
@@ -408,15 +504,15 @@ def query_endpoint(request: QueryRequest):
         context_snippets.append(f"- {titulo} ({ano}) — {evento} / {area}\n\"{content.strip()}\"")
 
         contexto_formatado = (
-        f"[INÍCIO DO DOCUMENTO {i+1}]\n"
-        f"Título: {titulo}\n"
-        f"Autores: {autores}\n"
-        f"Orientador: {payload.get('orientador', 'Não informado')}\n"
-        f"Ano: {ano}\n"
-        f"Evento: {evento}\n"
-        f"Link: {link}\n"
-        f"Conteúdo do trecho: \"{content.strip()}\"\n" 
-        f"[FIM DO DOCUMENTO {i+1}]"
+            f"[INÍCIO DO DOCUMENTO {i+1}]\n"
+            f"Título: {titulo}\n"
+            f"Autores: {autores}\n"
+            f"Orientador: {payload.get('orientador', 'Não informado')}\n"
+            f"Ano: {ano}\n"
+            f"Evento: {evento}\n"
+            f"Link: {link}\n"
+            f"Conteúdo do trecho: \"{content.strip()}\"\n"
+            f"[FIM DO DOCUMENTO {i+1}]"
         )
         context_snippets.append(contexto_formatado)
 
@@ -431,16 +527,16 @@ def query_endpoint(request: QueryRequest):
         })
 
     prompt = (
-    "Você é um assistente de pesquisa preciso e factual. Sua tarefa é responder perguntas com base EXCLUSIVAMENTE nos trechos de documentos fornecidos a seguir.\n"
-    "REGRAS IMPORTANTES:\n"
-    "1. NÃO invente, infira ou adicione qualquer informação que não esteja explicitamente declarada nos documentos.\n"
-    "2. Se a resposta para a pergunta não puder ser encontrada nos textos fornecidos, responda exatamente com: 'Com base nos documentos fornecidos, não encontrei informações para responder a essa pergunta.'\n"
-    "3. Responda em HTML válido (<p>, <ul>, <li>, <a>, <strong>, <em>, <br>).\n\n"
-    "--- DOCUMENTOS RELEVANTES ---\n"
-    f"{chr(10).join(context_snippets)}\n\n"
-    "--- FIM DOS DOCUMENTOS ---\n\n"
-    f"Pergunta do usuário: {q}\n"
-    "Resposta (HTML):"
+        "Você é um assistente de pesquisa preciso e factual. Sua tarefa é responder perguntas com base EXCLUSIVAMENTE nos trechos de documentos fornecidos a seguir.\n"
+        "REGRAS IMPORTANTES:\n"
+        "1. NÃO invente, infira ou adicione qualquer informação que não esteja explicitamente declarada nos documentos.\n"
+        "2. Se a resposta para a pergunta não puder ser encontrada nos textos fornecidos, responda exatamente com: 'Com base nos documentos fornecidos, não encontrei informações para responder a essa pergunta.'\n"
+        "3. Responda em HTML válido (<p>, <ul>, <li>, <a>, <strong>, <em>, <br>).\n\n"
+        "--- DOCUMENTOS RELEVANTES ---\n"
+        f"{chr(10).join(context_snippets)}\n\n"
+        "--- FIM DOS DOCUMENTOS ---\n\n"
+        f"Pergunta do usuário: {q}\n"
+        "Resposta (HTML):"
     )
 
     try:
@@ -466,7 +562,6 @@ def query_endpoint(request: QueryRequest):
         logger.error(f"Falha ao chamar LLM: {e}")
         raise HTTPException(status_code=500, detail="Erro na geração da resposta.")
 
-    # 7) extrai texto
     answer_text = ""
     if "choices" in data and data["choices"]:
         ch = data["choices"][0]

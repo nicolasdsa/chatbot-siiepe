@@ -53,6 +53,8 @@ services:
       - models:/models
     networks:
       - rag-network
+    ports:
+      - "8001:8000"
     #depends_on:
     #  model-puller:
     #    condition: service_healthy
@@ -76,6 +78,8 @@ services:
       - rag-network
     ports:
       - "5173:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   rag-api:
     build:
@@ -83,6 +87,7 @@ services:
       dockerfile: Dockerfile.api
     container_name: rag-api
     restart: unless-stopped
+    network_mode: "host"
     depends_on:
       qdrant:
         condition: service_started
@@ -94,10 +99,6 @@ services:
       - .env
     environment:
       EMBEDDING_LOCAL_PATH: ${EMBEDDING_LOCAL_PATH}
-    ports:
-      - "8000:8000"
-    networks:
-      - rag-network
     volumes:
       - models:/models
     command: ["/bin/bash", "-lc", "/wait_for_models.sh && uvicorn app:app --host 0.0.0.0 --port 8000"]
